@@ -48,19 +48,26 @@ final class DirIpAdmin {
     /* ---------------- Sanitize & Render ---------------- */
 
     public static function sanitize_settings($input) {
+        // Unslash entire payload to avoid double-escaped strings
+        $input = is_array($input) ? wp_unslash($input) : [];
+
         $out = ['rules' => []];
 
-        if (!is_array($input) || empty($input['rules']) || !is_array($input['rules'])) {
+        if (empty($input['rules']) || !is_array($input['rules'])) {
             return $out;
         }
 
         // Prepare list of valid role slugs
-        $wp_roles = wp_roles();
+        $wp_roles    = wp_roles();
         $valid_roles = is_object($wp_roles) && isset($wp_roles->roles) ? array_keys($wp_roles->roles) : [];
 
-        foreach ($input['rules'] as $rule) {
-            $path = isset($rule['path']) ? trim(wp_unslash($rule['path'])) : '';
-            if ($path === '') continue;
+        foreach ($input['rules'] as $idx => $rule) {
+            if (!is_array($rule)) continue;
+
+            $path = isset($rule['path']) ? trim((string)$rule['path']) : '';
+            if ($path === '') {
+                continue;
+            }
 
             $restrict_children = !empty($rule['restrict_children']) ? 1 : 0;
             $active            = !empty($rule['active']) ? 1 : 0;
@@ -69,17 +76,19 @@ final class DirIpAdmin {
             $sel_roles_raw = isset($rule['allowed_user_groups']) && is_array($rule['allowed_user_groups'])
                 ? array_map('sanitize_key', $rule['allowed_user_groups'])
                 : [];
-            // Keep only valid roles
             $allowed_user_groups = array_values(array_intersect($sel_roles_raw, $valid_roles));
 
-            // Allowed extra groups (custom user/IP blocks)
+            // Allow extra groups (custom user/IP blocks)
             $groups_out = [];
             if (!empty($rule['groups']) && is_array($rule['groups'])) {
                 foreach ($rule['groups'] as $grp) {
+                    if (!is_array($grp)) continue;
+
                     $gname = isset($grp['name']) ? sanitize_text_field($grp['name']) : '';
                     $users_out = [];
                     if (!empty($grp['users']) && is_array($grp['users'])) {
                         foreach ($grp['users'] as $u) {
+                            if (!is_array($u)) continue;
                             $username = isset($u['username']) ? sanitize_text_field($u['username']) : '';
                             // Keep raw textarea; runtime will parse as tab/newline-separated
                             $ips_raw  = isset($u['ips']) ? (string) $u['ips'] : '';
@@ -111,6 +120,9 @@ final class DirIpAdmin {
             ];
         }
 
+        // Reindex to avoid sparse arrays
+        $out['rules'] = array_values($out['rules']);
+
         return $out;
     }
 
@@ -141,7 +153,7 @@ final class DirIpAdmin {
 
                 function closest(el, sel){ while (el && !el.matches(sel)) el = el.parentElement; return el; }
 
-                // Prebuild roles options HTML via PHP for use in JS templates
+                // Roles <option> HTML provided by PHP, inserted verbatim in templates
                 const rolesOptionsHTML = (function(){
                     <?php
                     $wp_roles = wp_roles();
@@ -159,33 +171,33 @@ final class DirIpAdmin {
                 function tmplRule(index) {
                     const opt = '<?php echo esc_js(DirIpAdmin::OPTION); ?>';
                     return `
-<div class="dir-ipr-rule" data-index="\${index}">
+<div class="dir-ipr-rule" data-index="${index}">
   <div class="dir-ipr-flex" style="align-items:center;">
     <label class="dir-ipr-label" style="margin:0;">Folder or page:</label>
-    <input class="regular-text dir-ipr-input" name="\${opt}[rules][\${index}][path]" type="text" placeholder="/protected or /page-slug" />
+    <input class="regular-text dir-ipr-input" name="${opt}[rules][${index}][path]" type="text" placeholder="/protected or /page-slug" />
     <label>
-      <input type="checkbox" name="\${opt}[rules][\${index}][restrict_children]" value="1" />
+      <input type="checkbox" name="${opt}[rules][${index}][restrict_children]" value="1" />
       Restrict children
     </label>
     <label>
-      <input type="checkbox" name="\${opt}[rules][\${index}][active]" value="1" checked />
+      <input type="checkbox" name="${opt}[rules][${index}][active]" value="1" checked />
       Active
     </label>
   </div>
 
   <div class="dir-ipr-roles">
     <h4>Allowed user groups</h4>
-    <select class="dir-ipr-select" multiple size="6" name="\${opt}[rules][\${index}][allowed_user_groups][]" aria-label="Allowed user groups">
-      \${rolesOptionsHTML}
+    <select class="dir-ipr-select" multiple size="6" name="${opt}[rules][${index}][allowed_user_groups][]" aria-label="Allowed user groups">
+      ${rolesOptionsHTML}
     </select>
     <p class="description"><?php echo esc_html__('Users with any selected role are allowed automatically for this rule.', 'directory-ip-restrictor'); ?></p>
   </div>
 
   <div class="dir-ipr-groups">
-    <h4>Allowed extra groups</h4>
+    <h4>Allow extra groups</h4>
     <div class="dir-ipr-groups-wrap"></div>
     <p class="dir-ipr-actions">
-      <button class="button add-group" type="button">+ Add Group</button>
+      <button class="button add-group" type="button">+ Add Extra Group</button>
       <button class="button button-link-delete remove-rule" type="button">Remove Rule</button>
     </p>
   </div>
@@ -195,10 +207,10 @@ final class DirIpAdmin {
                 function tmplGroup(rIdx, gIdx) {
                     const opt = '<?php echo esc_js(DirIpAdmin::OPTION); ?>';
                     return `
-<div class="dir-ipr-group" data-gindex="\${gIdx}">
+<div class="dir-ipr-group" data-gindex="${gIdx}">
   <div class="dir-ipr-flex" style="align-items:center;">
     <label class="dir-ipr-label" style="margin:0;">Group name:</label>
-    <input class="regular-text dir-ipr-input" name="\${opt}[rules][\${rIdx}][groups][\${gIdx}][name]" type="text" placeholder="admin2" />
+    <input class="regular-text dir-ipr-input" name="${opt}[rules][${rIdx}][groups][${gIdx}][name]" type="text" placeholder="admin2" />
   </div>
   <div class="dir-ipr-users">
     <h5>Users</h5>
@@ -214,12 +226,12 @@ final class DirIpAdmin {
                 function tmplUser(rIdx, gIdx, uIdx) {
                     const opt = '<?php echo esc_js(DirIpAdmin::OPTION); ?>';
                     return `
-<div class="dir-ipr-user" data-uindex="\${uIdx}">
+<div class="dir-ipr-user" data-uindex="${uIdx}">
   <div class="dir-ipr-flex" style="flex-direction:column; align-items:stretch;">
     <label class="dir-ipr-label">User name (label):</label>
-    <input class="regular-text" name="\${opt}[rules][\${rIdx}][groups][\${gIdx}][users][\${uIdx}][username]" type="text" placeholder="John Doe" />
+    <input class="regular-text" name="${opt}[rules][${rIdx}][groups][${gIdx}][users][${uIdx}][username]" type="text" placeholder="John Doe" />
     <label class="dir-ipr-label" style="margin-top:8px;">IP addresses (tab/newline-separated):</label>
-    <textarea class="dir-ipr-textarea" rows="3" name="\${opt}[rules][\${rIdx}][groups][\${gIdx}][users][\${uIdx}][ips]" placeholder="185.71.88.46&#10;2a03:2880:f003:c07::1&#10;10.0.0.1"></textarea>
+    <textarea class="dir-ipr-textarea" rows="3" name="${opt}[rules][${rIdx}][groups][${gIdx}][users][${uIdx}][ips]" placeholder="185.71.88.46&#10;2a03:2880:f003:c07::1&#10;10.0.0.1"></textarea>
     <div style="margin-top:6px;">
       <button class="button button-link-delete remove-user" type="button">Remove</button>
     </div>
@@ -230,11 +242,12 @@ final class DirIpAdmin {
                 form.addEventListener('click', function(e){
                     const t = e.target;
 
-                    // Add Rule
+                    // Add Rule (global)
                     if (t.classList.contains('add-rule')) {
                         e.preventDefault();
                         const rulesWrap = form.querySelector('.dir-ipr-rules-wrap');
-                        const rIndex = rulesWrap ? rulesWrap.children.length : 0;
+                        if (!rulesWrap) return;
+                        const rIndex = rulesWrap.children.length;
                         rulesWrap.insertAdjacentHTML('beforeend', tmplRule(rIndex));
                         return;
                     }
@@ -247,12 +260,14 @@ final class DirIpAdmin {
                         return;
                     }
 
-                    // Add Group
+                    // Add Extra Group
                     if (t.classList.contains('add-group')) {
                         e.preventDefault();
                         const rule = closest(t, '.dir-ipr-rule');
+                        if (!rule) return;
                         const rIdx = Array.prototype.indexOf.call(rule.parentNode.children, rule);
                         const wrap = rule.querySelector('.dir-ipr-groups-wrap');
+                        if (!wrap) return;
                         const gIdx = wrap.children.length;
                         wrap.insertAdjacentHTML('beforeend', tmplGroup(rIdx, gIdx));
                         return;
@@ -271,9 +286,11 @@ final class DirIpAdmin {
                         e.preventDefault();
                         const group = closest(t, '.dir-ipr-group');
                         const rule  = closest(t, '.dir-ipr-rule');
+                        if (!group || !rule) return;
                         const rIdx  = Array.prototype.indexOf.call(rule.parentNode.children, rule);
                         const gIdx  = Array.prototype.indexOf.call(group.parentNode.children, group);
                         const wrap  = group.querySelector('.dir-ipr-users-wrap');
+                        if (!wrap) return;
                         const uIdx  = wrap.children.length;
                         wrap.insertAdjacentHTML('beforeend', tmplUser(rIdx, gIdx, uIdx));
                         return;
@@ -300,7 +317,7 @@ final class DirIpAdmin {
         $roles = (is_object($wp_roles) && isset($wp_roles->roles)) ? $wp_roles->roles : [];
 
         echo '<div class="dir-ipr-rules">';
-        echo '<div class="dir-ipr-rules-wrap">';
+        echo '  <div class="dir-ipr-rules-wrap">';
 
         if (!empty($rules)) {
             foreach ($rules as $rIndex => $rule) {
@@ -312,6 +329,8 @@ final class DirIpAdmin {
                 $sel_roles = is_array($rule['allowed_user_groups'] ?? null) ? $rule['allowed_user_groups'] : [];
 
                 echo '<div class="dir-ipr-rule" data-index="'.esc_attr($rIndex).'">';
+
+                // Header row
                 echo '  <div class="dir-ipr-flex" style="align-items:center;">';
                 echo '    <label class="dir-ipr-label" style="margin:0;">Folder or page:</label>';
                 echo '    <input class="regular-text dir-ipr-input" name="'.esc_attr(self::OPTION).'[rules]['.$rIndex.'][path]" type="text" value="'.$path.'" placeholder="/protected or /page-slug" />';
@@ -319,6 +338,7 @@ final class DirIpAdmin {
                 echo '    <label><input type="checkbox" name="'.esc_attr(self::OPTION).'[rules]['.$rIndex.'][active]" value="1" '.checked($act, true, false).' /> ' . esc_html__('Active', 'directory-ip-restrictor') . '</label>';
                 echo '  </div>';
 
+                // Allowed roles
                 echo '  <div class="dir-ipr-roles"><h4>'.esc_html__('Allowed user groups', 'directory-ip-restrictor').'</h4>';
                 echo '    <select class="dir-ipr-select" multiple size="6" name="'.esc_attr(self::OPTION).'[rules]['.$rIndex.'][allowed_user_groups][]" aria-label="Allowed user groups">';
                 foreach ($roles as $slug => $role) {
@@ -329,7 +349,8 @@ final class DirIpAdmin {
                 echo '    <p class="description">'.esc_html__('Users with any selected role are allowed automatically for this rule.', 'directory-ip-restrictor').'</p>';
                 echo '  </div>';
 
-                echo '  <div class="dir-ipr-groups"><h4>'.esc_html__('Allowed extra groups', 'directory-ip-restrictor').'</h4><div class="dir-ipr-groups-wrap">';
+                // Extra groups
+                echo '  <div class="dir-ipr-groups"><h4>'.esc_html__('Allow extra groups', 'directory-ip-restrictor').'</h4><div class="dir-ipr-groups-wrap">';
                 $groups = is_array($rule['groups'] ?? null) ? $rule['groups'] : [];
                 foreach ($groups as $gIndex => $group) {
                     $gname = esc_attr($group['name'] ?? '');
@@ -360,14 +381,16 @@ final class DirIpAdmin {
                     echo '</div>'; // group
                 }
                 echo '  </div>'; // groups-wrap
-                echo '  <p class="dir-ipr-actions"><button class="button button-primary add-rule" type="button">+ Add Rule</button> <button class="button button-link-delete remove-rule" type="button">Remove Rule</button></p>';
+                echo '  <p class="dir-ipr-actions"><button class="button add-group" type="button">+ Add Extra Group</button> <button class="button button-link-delete remove-rule" type="button">Remove Rule</button></p>';
                 echo '  </div>'; // groups
+
                 echo '</div>'; // rule
             }
         }
 
-        echo '</div>'; // rules-wrap
-        echo '<p class="dir-ipr-actions"><button class="button button-primary add-rule" type="button">+ Add Rule</button></p>';
+        echo '  </div>'; // rules-wrap
+        // Global add rule
+        echo '  <p class="dir-ipr-actions"><button class="button button-primary add-rule" type="button">+ Add Rule</button></p>';
         echo '</div>';
     }
 }
